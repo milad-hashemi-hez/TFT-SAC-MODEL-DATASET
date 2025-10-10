@@ -1,0 +1,42 @@
+
+# Core scientific & data stack
+numpy>=1.23.0
+pandas>=1.5.0
+scipy>=1.9.0
+
+# Machine learning & deep learning
+torch>=2.0.0,<2.4.0          # PyTorch (SAC, LSTM, custom nets)
+scikit-learn>=1.2.0
+pytorch-forecasting==1.1.0   # PyTorch (TFT)
+
+# Reinforcement learning frameworks
+stable-baselines3>=2.0.0     # Includes SAC, PPO, A2C, etc. (PyTorch-based)
+gymnasium>=0.28.0            # Modern RL environment API (replaces gym)
+
+# Financial data & utilities
+yfinance>=0.2.0              # Yahoo Finance data
+ta>=0.10.0                   # Technical analysis indicators
+matplotlib>=3.6.0
+seaborn>=0.12.0
+
+# Utilities
+tqdm>=4.65.0                 # Progress bars
+python-dotenv>=1.0.0         # Environment variables (e.g., API keys)
+joblib>=1.2.0                # Model persistence
+
+# Optional but useful
+optuna>=3.1.0                # Hyperparameter tuning
+tensorboard>=2.12.0          # Logging & visualization
+
+# RL ( Reinforcement learner agent ) designed and trained on Btcon dataset in order to trade.
+
+# Designed based on python 3.11.13
+# in this version ; python 3.11 has been used to create virtual environment
+# all mentioned packages and dependencies (here ) are compatiable with python 3.11
+# "ta" libarary as an alternative for pandas-ta
+# Trading_enviroment has been edited to get compatiable with "ta" libarary
+
+# this Agent has been designed and created based on TFT model and SAC model integrated together to train on Bitcoin dataset.
+# 1 # first create a virtual environment in project directory and then activate it
+# 2 # upgrade pip before package installation : pip install --upgrade pip
+# 3 # use this syntax to install the requirements.txt ( after pip upgrade ) : pip install -r requirements.txt
