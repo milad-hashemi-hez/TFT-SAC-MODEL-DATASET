@@ -1,5 +1,6 @@
 
 # train_tft_agent.py
+
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
@@ -7,7 +8,16 @@ from trading_environment import BitcoinTradingEnv
 from TFTSACAgent import TFTSACAgent
 
 # Initialize environment and agent
-env = BitcoinTradingEnv("bitcoin_data.csv")
+env = BitcoinTradingEnv("bitcoin_train.csv")
+
+print("🔍 DATA INTEGRITY CHECK:")
+print(f"Training file: bitcoin_train.csv")
+print(f"Data shape: {env.df.shape}")
+print(f"Date range: {env.df['Open time'].min()} to {env.df['Open time'].max()}")
+print(f"Total days: {len(env.df)}")
+print(f"First 5 dates: {env.df['Open time'].head(5).tolist()}")
+print(f"Last 5 dates: {env.df['Open time'].tail(5).tolist()}")
+
 state_size = 24
 action_size = 1
 
@@ -20,14 +30,14 @@ agent = TFTSACAgent(
     alpha=0.2,
     tau=0.005,
     batch_size=128,
-    seq_len=20,
+    seq_len=30,
     hidden_size=128,
     num_heads=8  # Number of attention heads in TFT
 )
 
 # Training config
 episodes = 500
-collect_steps_per_update = 128
+collect_steps_per_update = 512
 reward_history = []
 net_worth_history = []
 roi_history = []

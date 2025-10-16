@@ -1,4 +1,5 @@
-
-bitcoin_data.csv
-ethereum_data.csv
 venv/
+__pycache__/
+*.pyc
+*.pth
+*.csv
