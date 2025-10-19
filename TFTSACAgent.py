@@ -165,6 +165,40 @@ class TemporalFusionEncoder(nn.Module):
         
         return output
 
+# =============================================================================
+# FORECAST HEAD IMPLEMENTATION - STEP 1
+# =============================================================================
+class TFTForecastHead(nn.Module):
+    """TFT Forecast Head for price prediction with uncertainty"""
+    def __init__(self, hidden_size: int, num_quantiles: int = 3):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_quantiles = num_quantiles
+        
+        # Point prediction (mean)
+        self.point_proj = nn.Linear(hidden_size, 1)
+        
+        # Quantile predictions for uncertainty
+        self.quantile_proj = nn.Linear(hidden_size, num_quantiles)
+        
+        # Layer normalization for stability
+        self.layer_norm = nn.LayerNorm(hidden_size)
+        
+    def forward(self, encoded_seq: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        # encoded_seq shape: (batch_size, seq_len, hidden_size)
+        
+        # Use the last time step for forecasting
+        last_hidden = encoded_seq[:, -1, :]  # (batch_size, hidden_size)
+        normalized = self.layer_norm(last_hidden)
+        
+        # Point prediction (mean price)
+        point_pred = self.point_proj(normalized)  # (batch_size, 1)
+        
+        # Quantile predictions (uncertainty intervals)
+        quantile_pred = self.quantile_proj(normalized)  # (batch_size, num_quantiles)
+        
+        return point_pred, quantile_pred
+
 class TFTSACAgent:
     def __init__(self, state_size=24, action_size=1, lr=3e-4, gamma=0.99, alpha=0.2, 
                  tau=0.005, batch_size=128, seq_len=20, hidden_size=128, num_heads=8):
@@ -190,6 +224,18 @@ class TFTSACAgent:
             num_heads=num_heads
         ).to(self.device)
 
+        # =============================================================================
+        # FORECAST HEAD INITIALIZATION - STEP 2
+        # =============================================================================
+        self.forecast_head = TFTForecastHead(
+            hidden_size=hidden_size,
+            num_quantiles=3  # Predict 0.1, 0.5, 0.9 quantiles
+        ).to(self.device)
+
+        # Forecast optimizer
+        self.forecast_optimizer = optim.Adam(self.forecast_head.parameters(), lr=lr)
+        # =============================================================================
+
         # Actor network
         self.actor = nn.Sequential(
             nn.Linear(hidden_size, 128),
@@ -199,9 +245,9 @@ class TFTSACAgent:
             nn.Linear(64, 2 * action_size)
         ).to(self.device)
 
-        # Twin Critic Networks
+        # Twin Critic Networks - UPDATED FOR FORECAST FEATURES
         self.critic1 = nn.Sequential(
-            nn.Linear(hidden_size + action_size, 128),
+            nn.Linear(hidden_size + action_size + 2, 128),  # +2 for forecast features
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -209,7 +255,7 @@ class TFTSACAgent:
         ).to(self.device)
 
         self.critic2 = nn.Sequential(
-            nn.Linear(hidden_size + action_size, 128),
+            nn.Linear(hidden_size + action_size + 2, 128),  # +2 for forecast features
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -236,6 +282,24 @@ class TFTSACAgent:
     def _freeze_params(self, model):
         for param in model.parameters():
             param.requires_grad = False
+
+    # =============================================================================
+    # FORECAST LOSS FUNCTION - STEP 2
+    # =============================================================================
+    def _quantile_loss(self, target: torch.Tensor, quantile_pred: torch.Tensor, 
+                       quantiles: torch.Tensor = None) -> torch.Tensor:
+        """Calculate quantile loss for uncertainty estimation"""
+        if quantiles is None:
+            quantiles = torch.tensor([0.1, 0.5, 0.9], device=self.device)
+        
+        # target shape: (batch_size, 1)
+        # quantile_pred shape: (batch_size, num_quantiles)
+        errors = target.unsqueeze(-1) - quantile_pred.unsqueeze(1)  # (batch_size, 1, num_quantiles)
+        
+        # Quantile loss calculation
+        losses = torch.max((quantiles - 1) * errors, quantiles * errors)
+        return losses.mean()
+    # =============================================================================
 
     def act(self, state, evaluate=False):
         # state shape: (seq_len, state_size)
@@ -295,19 +359,41 @@ class TFTSACAgent:
         next_state_seqs = torch.FloatTensor(np.array(next_state_seqs)).to(self.device)
         dones = torch.BoolTensor(dones).unsqueeze(1).to(self.device)
 
+        # =============================================================================
+        # FORECAST TARGET PREPARATION - STEP 3
+        # =============================================================================
+        # Use next step's close price as forecast target (simple approach)
+        batch_size, seq_len, state_dim = state_seqs.shape
+        forecast_targets = state_seqs[:, -1, 0].unsqueeze(1)  # Use Close price as target
+        # =============================================================================
+
         # Encode sequences using TFT
         current_encoded = self.tft_encoder(state_seqs)  # (batch_size, seq_len, hidden_size)
         next_encoded = self.tft_encoder(next_state_seqs)  # (batch_size, seq_len, hidden_size)
 
+        # =============================================================================
+        # FORECAST PREDICTIONS - STEP 3
+        # =============================================================================
+        point_pred, quantile_pred = self.forecast_head(current_encoded)
+        forecast_loss = self._quantile_loss(forecast_targets, quantile_pred)
+        # =============================================================================
+
         # Take last time step representations
         current_features = current_encoded[:, -1, :]  # (batch_size, hidden_size)
-        next_features = next_encoded[:, -1, :]  # (batch_size, seq_len, hidden_size)
+        next_features = next_encoded[:, -1, :]  # (batch_size, hidden_size)
 
         # CRITIC LOSS - DETACH current_features for critic updates to avoid gradient conflicts
         current_features_detached = current_features.detach()  # Create detached copy for critics
 
-        current_q1 = self.critic1(torch.cat([current_features_detached, actions], dim=1))
-        current_q2 = self.critic2(torch.cat([current_features_detached, actions], dim=1))
+        # =============================================================================
+        # MODIFIED CRITIC INPUTS WITH FORECAST FEATURES - STEP 3
+        # =============================================================================
+        forecast_features = torch.cat([point_pred.detach(), quantile_pred.mean(dim=-1, keepdim=True).detach()], dim=-1)
+        critic_input = torch.cat([current_features_detached, actions, forecast_features], dim=1)
+
+        current_q1 = self.critic1(critic_input)
+        current_q2 = self.critic2(critic_input)
+        # =============================================================================
 
         # TARGET Q VALUES
         with torch.no_grad():
@@ -327,8 +413,12 @@ class TFTSACAgent:
             next_log_prob = next_log_prob_raw - next_tanh_correction
             next_log_prob = next_log_prob.sum(-1, keepdim=True)
 
-            target_q1 = self.critic1_target(torch.cat([next_features, next_action], dim=1))
-            target_q2 = self.critic2_target(torch.cat([next_features, next_action], dim=1))
+            # Target critics also use forecast features
+            next_forecast_features = torch.cat([point_pred.detach(), quantile_pred.mean(dim=-1, keepdim=True).detach()], dim=-1)
+            next_critic_input = torch.cat([next_features, next_action, next_forecast_features], dim=1)
+            
+            target_q1 = self.critic1_target(next_critic_input)
+            target_q2 = self.critic2_target(next_critic_input)
             min_target_q = torch.min(target_q1, target_q2)
             target_q = rewards + self.gamma * (1 - dones.float()) * (min_target_q - self.alpha * next_log_prob)
 
@@ -345,6 +435,15 @@ class TFTSACAgent:
         critic2_loss.backward(retain_graph=True)  # Keep graph for actor update
         torch.nn.utils.clip_grad_norm_(self.critic2.parameters(), max_norm=1.0)
         self.critic2_optimizer.step()
+
+        # =============================================================================
+        # FORECAST HEAD OPTIMIZATION - STEP 3
+        # =============================================================================
+        self.forecast_optimizer.zero_grad()
+        forecast_loss.backward(retain_graph=True)
+        torch.nn.utils.clip_grad_norm_(self.forecast_head.parameters(), max_norm=1.0)
+        self.forecast_optimizer.step()
+        # =============================================================================
 
         # ACTOR LOSS - Use original current_features (not detached) for actor update
         actor_mean_logstd = self.actor(current_features)  # Use original features
@@ -364,8 +463,11 @@ class TFTSACAgent:
         actor_log_prob = actor_log_prob.sum(-1, keepdim=True)
 
         with torch.no_grad():
-            q1_actor = self.critic1(torch.cat([current_features_detached, actor_action], dim=1))
-            q2_actor = self.critic2(torch.cat([current_features_detached, actor_action], dim=1))
+            actor_forecast_features = torch.cat([point_pred.detach(), quantile_pred.mean(dim=-1, keepdim=True).detach()], dim=-1)
+            actor_critic_input = torch.cat([current_features_detached, actor_action, actor_forecast_features], dim=1)
+            
+            q1_actor = self.critic1(actor_critic_input)
+            q2_actor = self.critic2(actor_critic_input)
             min_q_actor = torch.min(q1_actor, q2_actor)
 
         actor_loss = (self.alpha * actor_log_prob - min_q_actor).mean()
@@ -385,7 +487,11 @@ class TFTSACAgent:
         # UPDATE TARGET NETWORKS
         self._soft_update_target_networks()
 
-        return actor_loss.item(), (critic1_loss.item() + critic2_loss.item()) / 2, self.alpha
+        # =============================================================================
+        # RETURN FORECAST LOSS IN RESULTS - STEP 3
+        # =============================================================================
+        return actor_loss.item(), (critic1_loss.item() + critic2_loss.item()) / 2, self.alpha, forecast_loss.item()
+        # =============================================================================
 
     def _soft_update_target_networks(self):
         for t, s in zip(self.critic1_target.parameters(), self.critic1.parameters()):
@@ -402,8 +508,10 @@ class TFTSACAgent:
             'critic2_state_dict': self.critic2.state_dict(),
             'critic1_target_state_dict': self.critic1_target.state_dict(),
             'critic2_target_state_dict': self.critic2_target.state_dict(),
+            'forecast_head_state_dict': self.forecast_head.state_dict(),  # Added forecast head
             'log_alpha': self.log_alpha,
             'alpha_optimizer_state_dict': self.alpha_optimizer.state_dict(),
+            'forecast_optimizer_state_dict': self.forecast_optimizer.state_dict(),  # Added forecast optimizer
         }, filepath)
 
     def load_model(self, filepath):
@@ -414,7 +522,9 @@ class TFTSACAgent:
         self.critic1.load_state_dict(checkpoint['critic1_state_dict'])
         self.critic2.load_state_dict(checkpoint['critic2_state_dict'])
         self.critic1_target.load_state_dict(checkpoint['critic1_target_state_dict'])
-        self.critic2_target.state_dict(checkpoint['critic2_target_state_dict'])
+        self.critic2_target.load_state_dict(checkpoint['critic2_target_state_dict'])
+        self.forecast_head.load_state_dict(checkpoint['forecast_head_state_dict'])  # Added forecast head
         self.log_alpha = checkpoint['log_alpha']
         self.alpha_optimizer.load_state_dict(checkpoint['alpha_optimizer_state_dict'])
+        self.forecast_optimizer.load_state_dict(checkpoint['forecast_optimizer_state_dict'])  # Added forecast optimizer
         self.alpha = self.log_alpha.exp().item()

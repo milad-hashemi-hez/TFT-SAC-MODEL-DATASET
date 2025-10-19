@@ -43,6 +43,12 @@ net_worth_history = []
 roi_history = []
 update_count = 0
 
+# =============================================================================
+# FORECAST LOSS TRACKING - STEP 4
+# =============================================================================
+forecast_losses = []
+# =============================================================================
+
 # Track best model
 best_net_worth = env.initial_balance
 best_episode = 0
@@ -132,13 +138,19 @@ for e in range(episodes):
     if episode_steps >= collect_steps_per_update or (done and len(agent.memory) >= agent.batch_size):
         result = agent.train()
         if result is not None:
-            actor_loss, critic_loss, alpha = result
+            # =============================================================================
+            # UPDATED FOR FORECAST LOSS - STEP 4
+            # =============================================================================
+            actor_loss, critic_loss, alpha, forecast_loss = result
             actor_losses.append(actor_loss)
             critic_losses.append(critic_loss)
             alphas.append(alpha)
+            forecast_losses.append(forecast_loss)  # Track forecast loss
+            # =============================================================================
+            
             print(f"--- TFT-SAC Updated (#{update_count + 1}) ---")
             if actor_loss is not None:
-                print(f"  → Actor Loss: {actor_loss:.4f}, Critic Loss: {critic_loss:.4f}, Alpha: {alpha:.4f}")
+                print(f"  → Actor Loss: {actor_loss:.4f}, Critic Loss: {critic_loss:.4f}, Alpha: {alpha:.4f}, Forecast Loss: {forecast_loss:.4f}")
             else:
                 print("  → Not enough memory to train yet")
             update_count += 1
@@ -168,27 +180,45 @@ print(f"Final ROI: {roi_history[-1]:+.2f}%")
 print(f"Average Reward (Last 10): {np.mean(reward_history[-10:]):.2f}")
 print(f"Max Alpha (Entropy): {max(alphas):.4f}")
 
+# =============================================================================
+# FORECAST PERFORMANCE SUMMARY - STEP 4
+# =============================================================================
+if len(forecast_losses) > 0:
+    print(f"Final Forecast Loss: {forecast_losses[-1]:.4f}")
+    print(f"Average Forecast Loss: {np.mean(forecast_losses):.4f}")
+# =============================================================================
+
 # Save final model
 agent.save_model("final_tft_sac_model.pth")
 print("\n💾 Final model saved: final_tft_sac_model.pth")
 
 # Plot losses
 if len(actor_losses) > 0:
-    plt.figure(figsize=(12, 4))
-    plt.subplot(1, 3, 1)
+    plt.figure(figsize=(15, 4))
+    
+    plt.subplot(1, 4, 1)
     plt.plot(actor_losses, label="Actor Loss", color='red')
     plt.title("Actor Loss")
     plt.grid(True, alpha=0.3)
 
-    plt.subplot(1, 3, 2)
+    plt.subplot(1, 4, 2)
     plt.plot(critic_losses, label="Critic Loss", color='orange')
     plt.title("Critic Loss")
     plt.grid(True, alpha=0.3)
 
-    plt.subplot(1, 3, 3)
+    plt.subplot(1, 4, 3)
     plt.plot(alphas, label="Alpha (Entropy Coeff)", color='purple')
     plt.title("Entropy Tuning (Alpha)")
     plt.grid(True, alpha=0.3)
+
+    # =============================================================================
+    # FORECAST LOSS PLOT - STEP 4
+    # =============================================================================
+    plt.subplot(1, 4, 4)
+    plt.plot(forecast_losses, label="Forecast Loss", color='green')
+    plt.title("Forecast Loss")
+    plt.grid(True, alpha=0.3)
+    # =============================================================================
 
     plt.tight_layout()
     plt.show()
