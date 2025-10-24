@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 import ta
+from reward_block import default_reward_block
 
 # ==============================================================================
 # RunningMeanStd: Online algorithm to compute mean and variance incrementally.
@@ -69,6 +70,7 @@ class BitcoinTradingEnv:
         self.transaction_fee = transaction_fee
         self.normalize_obs = normalize_obs
         self.clip_rewards = clip_rewards  # Note: this flag is stored but not currently used in reward computation
+        self.reward_function = default_reward_block  # reward_block related
 
         # --- Technical Indicators ---
         # RSI (Relative Strength Index): momentum oscillator (0–100), indicates overbought/oversold
@@ -380,37 +382,24 @@ class BitcoinTradingEnv:
         else:
             log_return = np.log(self.net_worth / prev_net_worth)
 
-        reward = log_return * 1.0
+        ##############################################################################################
+        ############################## Reward Block ##################################################
+        ##############################################################################################    
 
-        # --- Bonus/Penalty Rewards ---
-        bonus_reward = 0.0
-        # Reward for holding during strong trend
-        if self.position > 0 and frame['trend_confidence'] > 0.4:
-            bonus_reward += 0.05
-        # Penalize aggressive trading during high volatility
-        if abs(action) > 0.3 and frame['high_volatility_regime'] > 0.5:
-            bonus_reward -= 0.05
-        # Reward for holding during breakout
-        if self.position > 0 and frame['breakout_strength'] > 0.3:
-            bonus_reward += 0.03
-        # Reward for stable actions (low churn)
-        if self.position > 0 and abs(action - self.last_action) < 0.1:
-            bonus_reward += 0.01
+        reward = self.reward_function(
+            log_return=log_return,
+            position=self.position,
+            action=action,
+            last_action=self.last_action,
+            frame=frame,
+            net_worth=self.net_worth,
+            max_equity=self.max_equity,
+            returns_history=self.returns_history
+        )
 
-        reward += bonus_reward
-
-        # --- Drawdown Penalty ---
-        drawdown = (self.net_worth - self.max_equity) / self.max_equity if self.max_equity > 0 else 0.0
-        if drawdown < -0.20:
-            reward -= 0.5
-        elif drawdown < -0.10:
-            reward -= 0.2
-
-        # --- Sharpe Ratio Reward Shaping ---
-        if len(self.returns_history) >= 50:
-            recent_returns = np.array(self.returns_history[-50:])
-            sharpe = np.mean(recent_returns) / (np.std(recent_returns) + 1e-6)
-            reward += np.clip(sharpe, -0.05, 0.1) * 0.1
+        ##############################################################################################
+        ##############################################################################################
+        ##############################################################################################     
 
         self.returns_history.append(log_return)
 
