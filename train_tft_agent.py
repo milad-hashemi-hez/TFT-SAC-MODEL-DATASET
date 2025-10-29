@@ -21,33 +21,31 @@ print(f"Last 5 dates: {env.df['Open time'].tail(5).tolist()}")
 state_size = 24
 action_size = 1
 
-# TFT-SAC Hyperparameters
+# TFT-SAC Hyperparameters ( with SEPARATE LEARNING RATES )
 agent = TFTSACAgent(
     state_size=state_size,
     action_size=action_size,
-    lr=3e-4,
+    actor_lr=3e-5,      # Conservative learning rate for actor
+    critic_lr=8e-5,     # Higher learning rate for critic
     gamma=0.99,
     alpha=0.2,
     tau=0.005,
     batch_size=128,
-    seq_len=30,
+    seq_len=60,
     hidden_size=128,
     num_heads=8  # Number of attention heads in TFT
 )
 
 # Training config
-episodes = 500
+episodes = 1000
 collect_steps_per_update = 512
 reward_history = []
 net_worth_history = []
 roi_history = []
 update_count = 0
 
-# =============================================================================
-# FORECAST LOSS TRACKING - STEP 4
-# =============================================================================
+# FORECAST LOSS TRACKING
 forecast_losses = []
-# =============================================================================
 
 # Track best model
 best_net_worth = env.initial_balance
@@ -138,15 +136,11 @@ for e in range(episodes):
     if episode_steps >= collect_steps_per_update or (done and len(agent.memory) >= agent.batch_size):
         result = agent.train()
         if result is not None:
-            # =============================================================================
-            # UPDATED FOR FORECAST LOSS - STEP 4
-            # =============================================================================
             actor_loss, critic_loss, alpha, forecast_loss = result
             actor_losses.append(actor_loss)
             critic_losses.append(critic_loss)
             alphas.append(alpha)
             forecast_losses.append(forecast_loss)  # Track forecast loss
-            # =============================================================================
             
             print(f"--- TFT-SAC Updated (#{update_count + 1}) ---")
             if actor_loss is not None:
@@ -180,13 +174,10 @@ print(f"Final ROI: {roi_history[-1]:+.2f}%")
 print(f"Average Reward (Last 10): {np.mean(reward_history[-10:]):.2f}")
 print(f"Max Alpha (Entropy): {max(alphas):.4f}")
 
-# =============================================================================
-# FORECAST PERFORMANCE SUMMARY - STEP 4
-# =============================================================================
+# FORECAST PERFORMANCE SUMMARY
 if len(forecast_losses) > 0:
     print(f"Final Forecast Loss: {forecast_losses[-1]:.4f}")
     print(f"Average Forecast Loss: {np.mean(forecast_losses):.4f}")
-# =============================================================================
 
 # Save final model
 agent.save_model("final_tft_sac_model.pth")
@@ -211,14 +202,10 @@ if len(actor_losses) > 0:
     plt.title("Entropy Tuning (Alpha)")
     plt.grid(True, alpha=0.3)
 
-    # =============================================================================
-    # FORECAST LOSS PLOT - STEP 4
-    # =============================================================================
     plt.subplot(1, 4, 4)
     plt.plot(forecast_losses, label="Forecast Loss", color='green')
     plt.title("Forecast Loss")
     plt.grid(True, alpha=0.3)
-    # =============================================================================
 
     plt.tight_layout()
     plt.show()
