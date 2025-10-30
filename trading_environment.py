@@ -1,3 +1,4 @@
+
 # trading_environment.py
 
 import numpy as np
@@ -110,6 +111,69 @@ class BitcoinTradingEnv:
         self.df["volume_z"] = (self.df["Volume"] - self.df["volume_mean"]) / self.df["volume_std"]
         self.df["volume_z"] = np.clip(self.df["volume_z"], -5, 5).fillna(0)
 
+        # --- NEW: ESSENTIAL CRYPTO INDICATORS (6 ADDED) ---
+        
+        # 1. VWAP (Volume Weighted Average Price)
+        typical_price = (self.df['High'] + self.df['Low'] + self.df['Close']) / 3
+        cumulative_vp = (typical_price * self.df['Volume']).cumsum()
+        cumulative_volume = self.df['Volume'].cumsum()
+        self.df['vwap'] = cumulative_vp / cumulative_volume
+        self.df['price_vs_vwap'] = (self.df['Close'] / self.df['vwap']) - 1  # % deviation from VWAP
+
+        # 2. ATR% (Normalized Average True Range)
+        atr_indicator = ta.volatility.AverageTrueRange(
+            high=self.df['High'], 
+            low=self.df['Low'], 
+            close=self.df['Close'], 
+            window=14
+        )
+        self.df['atr'] = atr_indicator.average_true_range()
+        self.df['atr_percent'] = (self.df['atr'] / self.df['Close']) * 100  # Normalized ATR
+
+        # 3. Stochastic RSI (More sensitive momentum)
+        stoch_rsi_indicator = ta.momentum.StochRSIIndicator(
+            close=self.df['Close'], 
+            window=14, 
+            smooth1=3, 
+            smooth2=3
+        )
+        self.df['stoch_rsi'] = stoch_rsi_indicator.stochrsi()
+
+        # 4. Ichimoku Cloud Components
+        ichimoku_indicator = ta.trend.IchimokuIndicator(
+            high=self.df['High'],
+            low=self.df['Low'],
+            window1=9,
+            window2=26,
+            window3=52
+        )
+        self.df['ichimoku_conversion'] = ichimoku_indicator.ichimoku_conversion_line()
+        self.df['ichimoku_base'] = ichimoku_indicator.ichimoku_base_line()
+        self.df['ichimoku_leading_a'] = ichimoku_indicator.ichimoku_a()
+        self.df['ichimoku_leading_b'] = ichimoku_indicator.ichimoku_b()
+        
+        # Ichimoku Cloud Position (simplified)
+        self.df['ichimoku_cloud_bullish'] = (
+            (self.df['Close'] > self.df['ichimoku_leading_a']) & 
+            (self.df['Close'] > self.df['ichimoku_leading_b'])
+        ).astype(float)
+
+        # 5. Order Book Imbalance (Simulated - using OHLCV patterns)
+        # This is a proxy since we don't have real order book data
+        price_movement = self.df['Close'] - self.df['Open']
+        normalized_movement = price_movement / (self.df['High'] - self.df['Low']).replace(0, 1e-8)
+        volume_weighted = normalized_movement * self.df['volume_z']
+        self.df['order_imbalance_proxy'] = np.clip(volume_weighted, -1, 1).fillna(0)
+
+        # 6. Liquidation Levels Proxy (using volatility and price extremes)
+        # Simulates liquidation pressure zones
+        recent_high = self.df['High'].rolling(window=50).max()
+        recent_low = self.df['Low'].rolling(window=50).min()
+        price_position = (self.df['Close'] - recent_low) / (recent_high - recent_low).replace(0, 1e-8)
+        # Higher volatility + extreme price positions = higher liquidation risk
+        liquidation_risk = self.df['atr_percent'] * np.abs(price_position - 0.5) * 2
+        self.df['liquidation_risk'] = np.clip(liquidation_risk / 10, 0, 1).fillna(0)  # Normalized to [0,1]
+
         # --- Log Returns (safe version) ---
         # Log returns over multiple time horizons (1, 5, 15, 60 steps)
         close_shifted_1 = self.df['Close'].shift(1)
@@ -203,8 +267,8 @@ class BitcoinTradingEnv:
         print(f"📊 Dataset shape after cleaning: {self.df.shape}")
 
         # --- State Setup ---
-        # Total number of observation features (must match _get_observation_raw)
-        self.state_size = 24
+        # Total number of observation features (increased from 24 to 30)
+        self.state_size = 30  # UPDATED: 24 original + 6 new indicators
         self.obs_rms = RunningMeanStd(shape=(self.state_size,))
 
         # Initialize trading state variables
@@ -222,34 +286,21 @@ class BitcoinTradingEnv:
     def _get_observation_raw(self, step):
         """
         Construct the raw (unnormalized) observation vector at a given time step.
-        The observation has exactly 24 features, listed below by index:
-
-        Index | Feature Name                | Description
-        ------|-----------------------------|-----------------------------------------------
-          0   | log_return_1                | 1-step log return
-          1   | log_return_5                | 5-step log return
-          2   | log_return_15               | 15-step log return
-          3   | log_return_60               | 60-step log return
-          4   | price_vs_sma10              | % deviation from 10-period SMA
-          5   | price_vs_sma50              | % deviation from 50-period SMA
-          6   | rsi                         | Relative Strength Index (0–100)
-          7   | macd_hist                   | MACD histogram (momentum strength)
-          8   | bb_percent                  | % position within Bollinger Bands [0,1]
-          9   | volatility_10               | 10-step rolling volatility
-         10   | volume_z                    | Volume Z-score (standardized volume)
-         11   | equity_ratio                | Cash / Net Worth
-         12   | position_ratio              | (Position * Price) / Net Worth
-         13   | last_action                 | Previous action [-1, 1]
-         14   | hour_sin                    | Sine of hour (cyclical encoding)
-         15   | hour_cos                    | Cosine of hour (cyclical encoding)
-         16   | day_sin                     | Sine of day-of-week
-         17   | day_cos                     | Cosine of day-of-week
-         18   | trend_confidence            | Weighted signal for trending market (0 or 0.5)
-         19   | mean_reversion              | Weighted signal for overbought reversal (0 or 0.5)
-         20   | volume_confirmed            | Weighted volume confirmation signal (0 or 0.3)
-         21   | breakout_strength           | Weighted breakout signal (0 or 0.4)
-         22   | high_volatility_regime      | Volatility regime flag (0 or 0.5)
-         23   | asia_session_bias           | Heuristic Asia session flag (0 or 0.3)
+        The observation now has 30 features (24 original + 6 new crypto indicators).
+        
+        Original 24 features (0-23):
+        [0-5] Price & Returns, [6-10] Technical Indicators, [11-13] Portfolio State,
+        [14-17] Time Features, [18-23] Symbolic Logic Features
+        
+        NEW 6 features (24-29):
+        Index | Feature Name           | Description
+        ------|------------------------|-----------------------------------------------
+         24   | price_vs_vwap         | % deviation from VWAP
+         25   | atr_percent           | Normalized ATR (% of price)
+         26   | stoch_rsi             | Stochastic RSI (more sensitive momentum)
+         27   | ichimoku_cloud_bullish| Ichimoku cloud position (0 or 1)
+         28   | order_imbalance_proxy | Simulated order book imbalance
+         29   | liquidation_risk      | Liquidation risk estimate [0,1]
         """
         frame = self.df.iloc[step]
 
@@ -259,6 +310,7 @@ class BitcoinTradingEnv:
         position_ratio = (self.position * current_price) / net_worth if net_worth > 0 else 0.0
 
         obs = np.array([
+            # Original 24 features (0-23)
             frame['log_return_1'],
             frame['log_return_5'],
             frame['log_return_15'],
@@ -283,6 +335,14 @@ class BitcoinTradingEnv:
             frame['breakout_strength'],
             frame['high_volatility_regime'],
             frame['asia_session_bias'],
+            
+            # NEW: 6 essential crypto indicators (24-29)
+            frame['price_vs_vwap'],           # 24
+            frame['atr_percent'],             # 25
+            frame['stoch_rsi'],               # 26
+            frame['ichimoku_cloud_bullish'],  # 27
+            frame['order_imbalance_proxy'],   # 28
+            frame['liquidation_risk']         # 29
         ], dtype=np.float64)
 
         # Replace any remaining NaNs or infinities with 0 for safety
@@ -302,7 +362,6 @@ class BitcoinTradingEnv:
         """
         Reset the environment to initial state.
         - Restores balance, clears position, resets step counter.
-        - Also resets the running normalization stats (note: this may affect training if done between episodes).
         - Returns initial observation.
         """
         self.balance = self.initial_balance
@@ -316,7 +375,14 @@ class BitcoinTradingEnv:
         self.prev_position = 0.0
         self.returns_history = []
         self.max_equity = self.initial_balance
-        self.obs_rms.reset()  # Resets normalization statistics
+        
+        # FIX: Only reset normalization stats if they have the correct shape
+        if hasattr(self, 'obs_rms') and self.obs_rms.mean.shape == (self.state_size,):
+            self.obs_rms.reset()
+        else:
+            # Reinitialize if shape is wrong (safety check)
+            self.obs_rms = RunningMeanStd(shape=(self.state_size,))
+            
         return self._get_observation()
 
     def step(self, action):

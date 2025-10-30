@@ -18,8 +18,10 @@ print(f"Total days: {len(env.df)}")
 print(f"First 5 dates: {env.df['Open time'].head(5).tolist()}")
 print(f"Last 5 dates: {env.df['Open time'].tail(5).tolist()}")
 
-state_size = 24
+state_size = env.state_size  # ✅ This automatically gets actual number of states designed in tarding_environment
 action_size = 1
+
+print(f"🎯 STATE SIZE: {state_size} (automatically detected from environment)")
 
 # TFT-SAC Hyperparameters ( with SEPARATE LEARNING RATES )
 agent = TFTSACAgent(
@@ -31,18 +33,24 @@ agent = TFTSACAgent(
     alpha=0.2,
     tau=0.005,
     batch_size=128,
-    seq_len=60,
+    seq_len=30,
     hidden_size=128,
     num_heads=8  # Number of attention heads in TFT
 )
 
 # Training config
-episodes = 1000
+episodes = 500
 collect_steps_per_update = 512
 reward_history = []
 net_worth_history = []
 roi_history = []
 update_count = 0
+
+# Add verification step
+print("🧪 VERIFICATION:")
+state = env.reset()
+print(f"State shape: {state.shape}")  # Should be (30,)
+print(f"State range: [{state.min():.3f}, {state.max():.3f}]")
 
 # FORECAST LOSS TRACKING
 forecast_losses = []

@@ -6,6 +6,8 @@ import pandas as pd
 from trading_environment import BitcoinTradingEnv
 from TFTSACAgent import TFTSACAgent
 
+
+
 def validate_trained_model(model_path="best_tft_sac_model.pth", test_data_path="bitcoin_test.csv"):
     """
     Proper validation of trained TFT-SAC agent on test data
@@ -15,7 +17,7 @@ def validate_trained_model(model_path="best_tft_sac_model.pth", test_data_path="
     
     # Initialize test environment
     test_env = BitcoinTradingEnv(test_data_path, normalize_obs=False)  # Turn off normalization for consistent evaluation
-    state_size = 24
+    state_size = test_env.state_size
     action_size = 1
     
     # Initialize agent with same architecture
