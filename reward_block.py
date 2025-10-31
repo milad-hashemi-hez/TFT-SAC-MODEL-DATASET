@@ -8,6 +8,6 @@ def default_reward_block(log_return, position, action, last_action, frame,
     """
     Default reward block - exactly the same as your current reward logic
     """
-    reward = log_return * 1000.0
+    reward = log_return * 100.0
 
     return float(reward)
