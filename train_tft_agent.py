@@ -28,7 +28,7 @@ agent = TFTSACAgent(
     state_size=state_size,
     action_size=action_size,
     actor_lr=3e-5,
-    critic_lr=8e-5,
+    critic_lr=4.8e-5,
     gamma=0.99,
     alpha=0.2,
     tau=0.005,
@@ -39,7 +39,7 @@ agent = TFTSACAgent(
 )
 
 # Training config
-episodes = 100
+episodes = 500
 collect_steps_per_update = 512
 reward_history = []
 net_worth_history = []
